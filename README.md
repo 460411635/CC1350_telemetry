@@ -7,8 +7,8 @@ Use TI CC1350 as drone telemetry.
 
 CC1350 will copy messages received from UART into the payload of an EasyLink packet and broadcast into the air. 
 
-6/7/2019 update: 
+## 6/7/2019 update: 
 No packet loss in Mission Planner
 
-Bug: 
+## Bug 
 The CC1350 connected to GCS will stop working after ~10 minutes. Restart and it will reconnect. This bug does not occur in the CC1350 on flight. 
