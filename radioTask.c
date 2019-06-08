@@ -27,6 +27,7 @@
 #include <ti/drivers/PIN.h>
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/UART.h>
+#include <ti/drivers/uart/UARTCC26XX.h>
 
 /* Board Header files */
 #include "Board.h"
@@ -74,6 +75,7 @@ static void rxDoneCb(EasyLink_RxPacket * rxPacket, EasyLink_Status status);
 EasyLink_RxPacket rxPacket_buf;
 
 static void UART_readDoneCb(UART_Handle uh, void *buf, size_t len);
+static void UART_writeDoneCb(UART_Handle uh, void *buf, size_t len);
 
 static UART_Handle uartHandle;
 static UART_Params uartParams;
@@ -85,8 +87,8 @@ static EasyLink_RxPacket rxPacket;
 static Semaphore_Handle rxPktMutex;
 
 /* UART message */
-#define UART_MSG_LENGTH 22
-static char uart_msg[UART_MSG_LENGTH];
+#define UART_MSG_LENGTH 240
+static uint8_t uart_msg[UART_MSG_LENGTH];
 
 void radioTask_init(void) {
     /* Open LED pins */
@@ -106,21 +108,22 @@ void radioTask_init(void) {
     GPIO_init();
     UART_init();
     UART_Params_init(&uartParams);
-    uartParams.writeMode = UART_MODE_BLOCKING;
+    uartParams.writeMode = UART_MODE_CALLBACK;
     uartParams.readMode = UART_MODE_CALLBACK;
-    //uartParams.writeCallback = NULL;
+    uartParams.writeCallback = UART_writeDoneCb;
     uartParams.readCallback = UART_readDoneCb;
     uartParams.writeDataMode = UART_DATA_BINARY;
     uartParams.readDataMode = UART_DATA_BINARY;
     uartParams.readReturnMode = UART_RETURN_FULL;
     uartParams.readEcho = UART_ECHO_OFF;
-    uartParams.baudRate = 115200;
+    uartParams.baudRate = 57600;
 
     uartHandle = UART_open(Board_UART0, &uartParams);
     if (uartHandle == NULL) {
         /* UART_open() failed */
         System_abort("UART open failed");
     }
+    //int_fast16_t ret_code = UART_control(uartHandle, UARTCC26XX_CMD_RETURN_PARTIAL_ENABLE, NULL);
     /* Create a semaphore for Async*/
     Semaphore_Params params;
 
@@ -172,8 +175,8 @@ void radioTaskFnx(UArg arg0, UArg arg1) {
                 Semaphore_pend(rxPktMutex, BIOS_WAIT_FOREVER);
             }
             UART_write(uartHandle, rxPacket.payload, rxPacket.len);
-            Semaphore_post(rxPktMutex);
-            EasyLink_receiveAsync(rxDoneCb, 0);
+            //Semaphore_post(rxPktMutex);
+            //EasyLink_receiveAsync(rxDoneCb, 0);
         }
         if (events & RADIO_EVENT_RECV_UART) {
             status = EasyLink_abort();
@@ -191,7 +194,7 @@ void radioTaskFnx(UArg arg0, UArg arg1) {
                     System_abort("EasyLink_transmit failed");
                 }
             }
-            UART_read(uartHandle, uart_msg, UART_MSG_LENGTH);
+            //UART_read(uartHandle, uart_msg, UART_MSG_LENGTH);
         }
         if (events & RADIO_EVENT_RADIO_RX_ERROR) {
             EasyLink_receiveAsync(rxDoneCb, 0);
@@ -206,15 +209,18 @@ static void rxDoneCb(EasyLink_RxPacket * rxpkt, EasyLink_Status status)
 {
     if (status == EasyLink_Status_Success)
     {
-        /* Toggle LED2 to indicate RX */
-        PIN_setOutputValue(pinHandle, Board_PIN_LED2,!PIN_getOutputValue(Board_PIN_LED2));
-        if (Semaphore_pend(rxPktMutex, 0) == FALSE) {
-            Semaphore_pend(rxPktMutex, BIOS_WAIT_FOREVER);
+        if (rxpkt->len > 5)  {
+            /* Toggle LED2 to indicate RX */
+            PIN_setOutputValue(pinHandle, Board_PIN_LED2,!PIN_getOutputValue(Board_PIN_LED2));
+            if (Semaphore_pend(rxPktMutex, 0) == FALSE) {
+                Semaphore_pend(rxPktMutex, BIOS_WAIT_FOREVER);
+            }
+            memcpy(&rxPacket, rxpkt, sizeof(*rxpkt));
+            Semaphore_post(rxPktMutex);
+            Event_post(radioEventHandle, RADIO_EVENT_RECV_PKT);
+            EasyLink_receiveAsync(rxDoneCb, 0);
+            return;
         }
-        memcpy(&rxPacket, rxpkt, sizeof(*rxpkt));
-        Semaphore_post(rxPktMutex);
-        Event_post(radioEventHandle, RADIO_EVENT_RECV_PKT);
-        return;
     }
     else if(status == EasyLink_Status_Aborted)
     {
@@ -223,14 +229,12 @@ static void rxDoneCb(EasyLink_RxPacket * rxpkt, EasyLink_Status status)
     else
     {
         /* Toggle LED1 and LED2 to indicate error */
-        // PIN_setOutputValue(pinHandle, Board_PIN_LED1,!PIN_getOutputValue(Board_PIN_LED1));
-        // PIN_setOutputValue(pinHandle, Board_PIN_LED2,!PIN_getOutputValue(Board_PIN_LED2));
     }
     Event_post(radioEventHandle, RADIO_EVENT_RADIO_RX_ERROR);
 }
 
 static void UART_readDoneCb(UART_Handle uh, void *buf, size_t len) {
-    if (len > 0) {
+    if (len > 5) {
         if (Semaphore_pend(txPktMutex, 0) == FALSE) {
             Semaphore_pend(txPktMutex, BIOS_WAIT_FOREVER);
         }
@@ -240,6 +244,12 @@ static void UART_readDoneCb(UART_Handle uh, void *buf, size_t len) {
         memcpy(txPacket.payload, buf, len);
         Semaphore_post(txPktMutex);
         Event_post(radioEventHandle, RADIO_EVENT_RECV_UART);
+        UART_read(uh, uart_msg, UART_MSG_LENGTH);
+        return;
     }
     Event_post(radioEventHandle, RADIO_EVENT_UART_RX_ERROR);
+}
+
+static void UART_writeDoneCb(UART_Handle uh, void *buf, size_t len) {
+    Semaphore_post(rxPktMutex);
 }
