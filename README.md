@@ -12,3 +12,6 @@ No packet loss in Mission Planner
 
 ## Bug 
 The CC1350 connected to GCS will stop working after ~10 minutes. Restart and it will reconnect. This bug does not occur in the CC1350 on flight. 
+
+## To-do
+Implement watchdog timer restart to recover from malfunction
